@@ -8,8 +8,14 @@
     'https://www.googleapis.com/auth/youtube.readonly'
   ];
 
+  var ONE_MONTH_IN_MILLISECONDS = 1000 * 60 * 60 * 24 * 30;
+
   // Keeps track of the YouTube user id of the current authenticated user.
   var channelId;
+
+  // See https://developers.google.com/chart/interactive/docs/quick_start for docs on the
+  // Google Chart Tools API.
+  google.load('visualization', '1.0', {'packages': ['corechart']});
 
   // This callback is invoked by the Google APIs JS client automatically when it is loaded.
   // See http://code.google.com/p/google-api-javascript-client/wiki/Authentication for docs.
@@ -162,7 +168,7 @@
           aElement.attr('href', '#');
           aElement.text(title);
           aElement.click(function() {
-            displayMessage('You clicked on video id ' + videoId);
+            displayVideoAnalytics(videoId);
           });
 
           // Call the jQuery.append() method to add the new <a> to the <li>,
@@ -176,6 +182,93 @@
         }
       }
     });
+  }
+
+  // Requests YouTube Analytics for videoId, and displays the results in a chart.
+  function displayVideoAnalytics(videoId) {
+    if (channelId) {
+      // A different date range can be used if desired; modify the ONE_MONTH_IN_MILLISECONDS to a
+      // different millisecond delta as desired.
+      var today = new Date();
+      var lastMonth = new Date(today.getTime() - ONE_MONTH_IN_MILLISECONDS);
+
+      var request = gapi.client.youtubeAnalytics.reports.query({
+        // The start-date and end-date parameters need to be YYYY-MM-DD strings.
+        'start-date': formatDateString(lastMonth),
+        'end-date': formatDateString(today),
+        // In a future release of the YouTube Analytics API, channel==default should be supported.
+        // In the meantime, you need to explicitly specify channel==channelId.
+        // See https://devsite.googleplex.com/youtube/analytics/v1/#ids
+        ids: 'channel==' + channelId,
+        dimensions: 'day',
+        sort: 'day',
+        // See https://developers.google.com/youtube/analytics/v1/available_reports for details
+        // on different filters and metrics you can request when dimensions=day.
+        metrics: 'views',
+        filters: 'video==' + videoId
+      });
+
+      request.execute(function(response) {
+        // This will be called regardless of whether the request succeeded or not; response will
+        // either have valid analytics data or an explanation of the error.
+        if ('error' in response) {
+          displayMessage(response.error.message);
+        } else {
+          displayChart(videoId, response);
+        }
+      });
+    } else {
+      displayMessage('The YouTube user id for the current user is not available.');
+    }
+  }
+
+  // Boilerplate code to take a Date object and return a YYYY-MM-DD string.
+  function formatDateString(date) {
+    var yyyy = date.getFullYear().toString();
+    var mm = padToTwoCharacters(date.getMonth() + 1);
+    var dd = padToTwoCharacters(date.getDate());
+
+    return yyyy + '-' + mm + '-' + dd;
+  }
+
+  // If number is a single digit, return it prepended with a '0'. Otherwise, return it as a string.
+  function padToTwoCharacters(number) {
+    if (number < 10) {
+      return '0' + number;
+    } else {
+      return number.toString();
+    }
+  }
+
+  // Calls the Google Chart Tools API to dynamically generate a chart of analytics data.
+  function displayChart(videoId, response) {
+    if ('rows' in response) {
+      hideMessage();
+
+      // The columnHeaders property contains an array of objects representing each column's title.
+      // E.g.: [{name:"day"},{name:"views"}]
+      // We need these column titles as a simple array, so jQuery.map() is called to get each
+      // element's name property and create a new array containing only those values.
+      var columns = $.map(response.columnHeaders, function(item) {
+        return item.name;
+      });
+      // The google.visualization.arrayToDataTable() wants an array of arrays.
+      // The first element is an array of column titles (previously calculated as "columns").
+      // The remaining elements are arrays representing each row of data.
+      // Fortunately, response.rows is already in this format, so it can just be concatenated.
+      // See https://developers.google.com/chart/interactive/docs/datatables_dataviews#arraytodatatable
+      var chartDataArray = [columns].concat(response.rows);
+      var chartDataTable = google.visualization.arrayToDataTable(chartDataArray);
+
+      var chart = new google.visualization.LineChart(document.getElementById('chart'));
+      chart.draw(chartDataTable, {
+        // Additional options can be set if desired.
+        // See https://developers.google.com/chart/interactive/docs/reference#visdraw
+        title: 'Views per Day of Video ' + videoId
+      });
+    } else {
+      displayMessage('No data available for video ' + videoId);
+    }
   }
 
   // Helper method to display a message on the page.
